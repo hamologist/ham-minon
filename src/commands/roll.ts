@@ -9,6 +9,12 @@ type TokenStates =
   | 'dice-or-modifier'
   | 'invalid-roll';
 
+type Dice = {
+  count: number;
+  sides: number;
+  modifier: number;
+};
+
 const builder = new SlashCommandBuilder()
   .setName('roll')
   .setDescription('Roll a specified set of dice.')
@@ -18,125 +24,163 @@ const builder = new SlashCommandBuilder()
     .setRequired(true)
   );
 
+class InvalidRollError extends Error {}
+
+class InputParser {
+  static stopOn = {
+    diceSplit: new Set(['d']),
+    plusOrMinus: new Set(['+', '-']),
+  };
+  protected input: string;
+  protected nextExpectedToken: TokenStates;
+  protected currentIndex: number;
+  protected dice: Dice[];
+
+  constructor(input: string) {
+    this.input = input;
+    this.nextExpectedToken = 'dice';
+    this.currentIndex = 0;
+    this.dice = [];
+  }
+
+  protected buildToken(stopOn: Set<string>) {
+    let token = '';
+    while (this.currentIndex < this.input.length) {
+      if (stopOn.has(this.input[this.currentIndex])) {
+        break;
+      }
+      token += this.input[this.currentIndex];
+      this.currentIndex += 1;
+    }
+
+    return token;
+  }
+
+  protected processDice() {
+    let token = this.buildToken(InputParser.stopOn.diceSplit);
+    const count = Number(token);
+    if (Number.isNaN(count) || count <= 0 || token === '') {
+      throw new InvalidRollError();
+    }
+
+    this.currentIndex += 1;
+
+    token = this.buildToken(InputParser.stopOn.plusOrMinus);
+    const sides = Number(token);
+    if (Number.isNaN(sides) || sides <= 0 || token === '') {
+      throw new InvalidRollError();
+    }
+
+    this.nextExpectedToken = 'add-or-subtract'
+    this.dice.push({ count, sides, modifier: 0 });
+  }
+
+  protected processAddOrSubtract() {
+    const token = this.input[this.currentIndex];
+    this.currentIndex += 1;
+
+    switch (token) {
+      case '+': {
+        this.nextExpectedToken = 'dice-or-modifier';
+        break;
+      }
+      case '-': {
+        this.nextExpectedToken = 'subtract-modifier';
+        break;
+      }
+      default: {
+        throw new InvalidRollError();
+      }
+    }
+  }
+
+  protected processModifier() {
+    let token = this.buildToken(InputParser.stopOn.plusOrMinus);
+    const modifier = Number(token);
+    if (Number.isNaN(modifier) || modifier <= 0 || token === '') {
+      throw new InvalidRollError();
+    }
+    this.dice[this.dice.length - 1].modifier += modifier * (this.nextExpectedToken === 'subtract-modifier' ? -1 : 1);
+    this.nextExpectedToken = 'add-or-subtract';
+  }
+
+  protected processDiceOrModifier() {
+    for (let i = this.currentIndex; i < this.input.length; i++) {
+      if (this.input[i] === 'd') {
+        this.nextExpectedToken = 'dice';
+        return;
+      }
+      if (this.input[i] === '+') {
+        this.nextExpectedToken = 'add-modifier';
+        return;
+      }
+      if (this.input[i] === '-') {
+        this.nextExpectedToken = 'add-modifier';
+        return;
+      }
+    }
+
+    if (this.nextExpectedToken === 'dice-or-modifier') {
+      this.nextExpectedToken = 'add-modifier';
+    }
+  }
+
+  public parse() {
+    while (this.currentIndex < this.input.length) {
+      switch (this.nextExpectedToken) {
+        case 'dice': {
+          this.processDice();
+          break;
+        }
+        case 'add-or-subtract': {
+          this.processAddOrSubtract();
+          break;
+        }
+        case 'add-modifier':
+        case 'subtract-modifier': {
+          this.processModifier();
+          break;
+        }
+        case 'dice-or-modifier': {
+          this.processDiceOrModifier();
+          break;
+        }
+        default: {
+          throw new InvalidRollError();
+        }
+      }
+    }
+
+    if (this.nextExpectedToken === 'dice-or-modifier') {
+      throw new InvalidRollError();
+    }
+
+    return this.dice;
+  }
+}
+
 async function execute(interaction: ChatInputCommandInteraction) {
   const defer = interaction.deferReply();
 
-  const text = interaction.options.getString('text', true);
-  const chars = text.replaceAll(/\s/g, '').split("").toReversed();
+  const text = interaction.options.getString('text', true).replaceAll(/\s/g, '');
 
-  if (chars.length === 0) {
+  if (text.length === 0) {
     await defer;
     void interaction.editReply('No roll provided')
     return;
   }
 
-  let expectedToken: TokenStates = 'dice';
-  const dice: { count: number; sides: number; modifier: number; }[] = [];
-
-  main:
-    do {
-      switch (expectedToken) {
-        case 'dice': {
-          let token = '';
-          while (chars.length > 0) {
-            if (chars[chars.length - 1] === 'd') {
-              break;
-            }
-            token += chars.pop();
-          }
-
-          const count = Number(token);
-          if (Number.isNaN(count) || count <= 0 || token === '') {
-            expectedToken = 'invalid-roll';
-            break main;
-          }
-
-          chars.pop();
-
-          token = '';
-          while (chars.length > 0) {
-            if (chars[chars.length - 1] === '+' || chars[chars.length - 1] === '-') {
-              break;
-            }
-            token += chars.pop();
-          }
-
-          const sides = Number(token);
-          if (Number.isNaN(sides) || sides <= 0 || token === '') {
-              expectedToken = 'invalid-roll';
-              break main;
-          }
-
-          dice.push({ count, sides, modifier: 0 });
-          expectedToken = 'add-or-subtract'
-          break;
-        }
-        case 'add-or-subtract': {
-          const token = chars.pop();
-
-          switch (token) {
-            case '+': {
-              expectedToken = 'dice-or-modifier';
-              break;
-            }
-            case '-': {
-              expectedToken = 'subtract-modifier';
-              break;
-            }
-            default: {
-              expectedToken = 'invalid-roll';
-              break main;
-            }
-          }
-
-          break;
-        }
-        case 'add-modifier':
-        case 'subtract-modifier': {
-          let token = '';
-          while (chars.length > 0) {
-            if (chars[chars.length - 1] === '+' || chars[chars.length - 1] === '-') {
-              break;
-            }
-            token += chars.pop();
-          }
-
-          const modifier = Number(token);
-          if (Number.isNaN(modifier) || modifier <= 0 || token === '') {
-            expectedToken = 'invalid-roll';
-            break main;
-          }
-          dice[dice.length - 1].modifier += modifier * (expectedToken === 'subtract-modifier' ? -1 : 1);
-          expectedToken = 'add-or-subtract';
-          break;
-        }
-        case 'dice-or-modifier': {
-          for (let i = chars.length - 1; i >= 0; i--) {
-            if (chars[i] === 'd') {
-              expectedToken = 'dice';
-              break;
-            }
-            if (chars[i] === '+') {
-              expectedToken = 'add-modifier';
-              break;
-            }
-            if (chars[i] === '-') {
-              expectedToken = 'add-modifier';
-              break;
-            }
-          }
-
-          if (expectedToken === 'dice-or-modifier') {
-            expectedToken = 'add-modifier';
-          }
-          break;
-        }
-      }
-    } while (chars.length > 0);
-
-  if (expectedToken === 'invalid-roll' || expectedToken === 'dice-or-modifier') {
+  let dice: Dice[];
+  try {
+    dice = new InputParser(text).parse();
+  } catch (err) {
     await defer;
-    void interaction.editReply('I don\'t know how to roll that...');
+    if (err instanceof InvalidRollError) {
+      void interaction.editReply('I don\'t know how to roll that...');
+      return;
+    }
+
+    void interaction.editReply('Server error while parsing roll.');
     return;
   }
 
