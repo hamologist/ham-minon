@@ -1,5 +1,6 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder } from 'discord.js';
 import type { Command } from './index';
+import { z } from 'zod';
 
 type TokenStates =
   | 'dice'
@@ -160,12 +161,11 @@ class InputParser {
 }
 
 async function execute(interaction: ChatInputCommandInteraction) {
-  const defer = interaction.deferReply();
+  await interaction.deferReply();
 
   const text = interaction.options.getString('text', true).replaceAll(/\s/g, '');
 
   if (text.length === 0) {
-    await defer;
     void interaction.editReply('No roll provided')
     return;
   }
@@ -174,7 +174,6 @@ async function execute(interaction: ChatInputCommandInteraction) {
   try {
     dice = new InputParser(text).parse();
   } catch (err) {
-    await defer;
     if (err instanceof InvalidRollError) {
       void interaction.editReply('I don\'t know how to roll that...');
       return;
@@ -184,8 +183,53 @@ async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  await defer;
-  void interaction.editReply('Roll payload has been generated');
+  const response = await fetch('localhost:3000', {
+    method: 'POST',
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      dice,
+      count: 1,
+    }),
+  });
+  const json = await response.json();
+  console.debug("JSON:", json);
+  const result = z.object({
+    step: z.object({
+      rolls: z.object({
+        count: z.number(),
+        sides: z.number(),
+        modifier: z.number(),
+        rolls: z.number().array(),
+        total: z.number(),
+      }).array(),
+      total: z.number(),
+    }).array().length(1),
+  }).parse(json);
+
+  let message: string = '';
+  for (const roll of result.step[0].rolls) {
+    const messageBuilder: string[] = [];
+    for (const diceRoll of roll.rolls) {
+      messageBuilder.push(`(${diceRoll} of ${roll.sides})`);
+    }
+    if (message === '') {
+      message += messageBuilder.join(' + ');
+    } else {
+      message += ' + ' + messageBuilder.join(' + ');
+    }
+
+    if (roll.modifier > 0) {
+      message += ` + ${roll.modifier} `;
+    } else if (roll.modifier < 0) {
+      message += ` - ${Math.abs(roll.modifier)} `;
+    }
+  }
+  message = message.trim() + ` = ${result.step[0].total}`;
+
+  void interaction.editReply(message);
   console.debug(dice);
 }
 
