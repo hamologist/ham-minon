@@ -20,7 +20,7 @@ const builder = new SlashCommandBuilder()
   .setName('roll')
   .setDescription('Roll a specified set of dice.')
   .addStringOption((option) => option
-    .setName('text')
+    .setName('roll')
     .setDescription('Ex: 1d20 + 1d4 + 1d10 + 2')
     .setRequired(true)
   );
@@ -163,16 +163,16 @@ class InputParser {
 async function execute(interaction: ChatInputCommandInteraction) {
   await interaction.deferReply();
 
-  const text = interaction.options.getString('text', true).replaceAll(/\s/g, '');
+  const rollRequest = interaction.options.getString('roll', true).replaceAll(/\s/g, '');
 
-  if (text.length === 0) {
+  if (rollRequest.length === 0) {
     void interaction.editReply('No roll provided')
     return;
   }
 
   let dice: Dice[];
   try {
-    dice = new InputParser(text).parse();
+    dice = new InputParser(rollRequest).parse();
   } catch (err) {
     if (err instanceof InvalidRollError) {
       void interaction.editReply('I don\'t know how to roll that...');
@@ -195,7 +195,6 @@ async function execute(interaction: ChatInputCommandInteraction) {
     }),
   });
   const json = await response.json();
-  console.debug("JSON:", json);
   const result = z.object({
     step: z.object({
       rolls: z.object({
@@ -230,7 +229,6 @@ async function execute(interaction: ChatInputCommandInteraction) {
   message = message.trim() + ` = ${result.step[0].total}`;
 
   void interaction.editReply(message);
-  console.debug(dice);
 }
 
 export default {

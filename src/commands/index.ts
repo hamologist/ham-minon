@@ -1,5 +1,6 @@
 import { ChatInputCommandInteraction, SlashCommandBuilder, type SlashCommandOptionsOnlyBuilder } from 'discord.js';
 import Roll from './roll';
+import Emojify from './emojify';
 
 export type Command = {
   builder: SlashCommandBuilder | SlashCommandOptionsOnlyBuilder;
@@ -19,4 +20,5 @@ export const Ping: Command = {
 export const lookup = new Map<string, Command>([
   [Ping.builder.name, Ping],
   [Roll.builder.name, Roll],
+  [Emojify.builder.name, Emojify],
 ]);
